@@ -10,6 +10,7 @@ const int darkStateThreshold = 200; // How dark must it get to change to the DAR
 
 // Digital pins
 const int buttonPin = 2;
+const int doorSensorPin = 7;
 const int doorPin = 8;
 const int speakerPin = 9;
 const int greenLedPin = 12;
@@ -27,6 +28,16 @@ enum LED {GREEN, YELLOW, RED};
 const int minDoorWaitTimeHours = 10; // How long must the door keep a state before it can change states?
 const unsigned long minDoorWaitTime = minDoorWaitTimeHours * 60 * 60 * 1000 // Convert the hours to milliseconds (3,600,000 per hour)
 unsigned long lastDoorMotorRunTime = 0; // How long has it been since we last triggered the door motor to open or close
+bool doorFailed = false;
+enum DoorState {OPEN, CLOSED, FAILED};
+const String getDoorStateName(enum DoorState door) {
+  switch (door) {
+    case OPEN: return "Open";
+    case CLOSED: return "Closed";
+    case FAILED: return "Failed";
+  }
+}
+enum DoorState expectedDoorState;
 
 // Define the light states
 enum LightState {LIGHT, DARK, NEUTRAL};
@@ -71,48 +82,62 @@ void setup() {
 
 // put your main code here, to run repeatedly:
 void loop() {
-  if (!doorRunning) {
-    unsigned long currentTime = millis();
-    // If it's time to check the light level again, grab the current level, then state, and figure out if we're transitioning to a new state
-    if (currentTime - lastLightCheck >= lightCheckDelay && currentTime - lastDoorMotorRunTime >= minDoorWaitTime) {
-      int lightLevel = readLightSensor();
-      enum LightState newLightState = getLightState(lightLevel);
-      if (newLightState != NEUTRAL && newLightState != currentLightState) {
-        newStateCount++;
-        // Play a 1 second tone to alert that the door state may soon change
-        tone(speakerPin, 1000, 1000);
-        lightLed(YELLOW);
-      } else {
-        newStateCount = 0;
-        lightLed(GREEN);
+  if (doorFailed) {
+    // If the door hits a failure state, refuse to function until the program is reset.
+    // Flash the red LED on and off so someone notices the door failed
+    while (true) {
+      lightLed(RED);
+      delay(1);
+      digitalWrite(redLedPin, LOW);
+      delay(1);
+    }
+  } else {
+    if (!doorRunning) {
+      unsigned long currentTime = millis();
+      // If it's time to check the light level again, grab the current level, then state, and figure out if we're transitioning to a new state
+      if (currentTime - lastLightCheck >= lightCheckDelay && currentTime - lastDoorMotorRunTime >= minDoorWaitTime) {
+        int lightLevel = readLightSensor();
+        enum LightState newLightState = getLightState(lightLevel);
+        if (newLightState != NEUTRAL && newLightState != currentLightState) {
+          newStateCount++;
+          // Play a 1 second tone to alert that the door state may soon change
+          tone(speakerPin, 1000, 1000);
+          lightLed(YELLOW);
+        } else {
+          newStateCount = 0;
+          lightLed(GREEN);
+        }
+        Serial.println("New state count: " + String(newStateCount) + " (" + getLightStateName(newLightState) + " vs " + getLightStateName(currentLightState) + ")");
+        
+        // Check if we've made it to the new state threshold
+        if (newStateCount >= newStateThreshold) {
+          Serial.println("Switching state from " + getLightStateName(currentLightState) + " to " + getLightStateName(newLightState));
+          currentLightState = newLightState;
+          newStateCount = 0;
+          if (doorShouldRun()) {
+            lastDoorMotorRunTime = currentTime; // Restart the door wait countdown
+            startDoorMotor();  
+          }
+        }
+        lastLightCheck = currentTime;
       }
-      Serial.println("New state count: " + String(newStateCount) + " (" + getLightStateName(newLightState) + " vs " + getLightStateName(currentLightState) + ")");
-      
-      // Check if we've made it to the new state threshold
-      if (newStateCount >= newStateThreshold) {
-        Serial.println("Switching state from " + getLightStateName(currentLightState) + " to " + getLightStateName(newLightState));
-        currentLightState = newLightState;
+  
+      // If the door button was pressed, open/close the door, regardless of light state or door position
+      if (digitalRead(buttonPin) == LOW) {
+        if (debug) {
+          Serial.println("Button pressed."); 
+        }
+        // If the door is manually opened, reset the light state to whatever the light level currently is
+        currentLightState = getLightState(readLightSensor());
         newStateCount = 0;
         lastDoorMotorRunTime = currentTime; // Restart the door wait countdown
         startDoorMotor();
       }
-      lastLightCheck = currentTime;
     }
     
-    if (digitalRead(buttonPin) == LOW) {
-      if (debug) {
-        Serial.println("Button pressed."); 
-      }
-      // If the door is manually opened, reset the light state to whatever the light level currently is
-      currentLightState = getLightState(readLightSensor());
-      newStateCount = 0;
-      lastDoorMotorRunTime = currentTime; // Restart the door wait countdown
-      startDoorMotor();
+    if (doorRunning && isDoorMotorDone()) {
+      stopDoorMotor();
     }
-  }
-  
-  if (doorRunning && isDoorMotorDone()) {
-    stopDoorMotor();
   }
 }
 
@@ -138,7 +163,9 @@ int readLightSensor() {
 
 // Turn the door's power on for 30 seconds, then cycle it off
 void startDoorMotor() {
+  expectedDoorState = getExpectedDoorState();
   if (debug) {
+    Serial.println("Door is " + getDoorStateName(getDoorState()) + ". Expecting it will end up " + getDoorStateName(expectedDoorState) + ".");
     Serial.println("Turning door motor on.");
   }
   lightLed(RED);
@@ -157,12 +184,53 @@ bool isDoorMotorDone() {
 
 void stopDoorMotor() {
   digitalWrite(doorPin, LOW);
+  doorRunning = false;
+  if (getDoorState() == FALSE || getDoorState() != expectedDoorState()) {
+    doorFailed = true;
+  }
   if (debug) {
     Serial.println("Waited " + String((millis() - doorRunningStartTime) / 1000) + " seconds.");
     Serial.println("Turning door motor off.");
+    if (doorFailed) {
+      Serial.println("Door is not " + getDoorStateName(expectedDoorState) + ". Marking as failed.");
+    } else {
+      Serial.println("Door is now " + getDoorStateName(getDoorState()) + ".");
+    }
   }
-  doorRunning = false;
   lightLed(GREEN);
+}
+
+bool doorShouldRun() {
+  if (currentLightState == LIGHT && doorIsClosed()) {
+    return true;
+  }
+  if (currentLightState == DARK && !doorIsClosed()) {
+    return true;
+  }
+  return false;
+}
+
+DoorState getDoorState() {
+  if (doorFailed) {
+    return FAILED;
+  }
+  if (doorIsClosed()) {
+    return CLOSED;
+  } else {
+    return OPEN;
+  }
+}
+
+DoorState getExpectedDoorState() {
+  switch (getDoorState()) {
+    case OPEN: return CLOSED;
+    case CLOSED: return OPEN; 
+  }
+  return FAILED;
+}
+
+bool doorIsClosed() {
+  return digitalRead(doorSensorPin) == HIGH;
 }
 
 void lightLed(enum LED led) {
