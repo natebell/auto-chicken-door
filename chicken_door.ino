@@ -5,8 +5,8 @@ const bool debug = true;
 const int lightCheckDelaySeconds = 15; // How long to wait between checking the light sensor (default: 30 seconds)
 const int consecutiveLightCheckMinutes = 15; // How long must all the light checks agree before the light state can change (default: 30 minutes)
 const int doorRunTimeSeconds = 30; // How long should the door motor run (default: 30 seconds)
-const int lightStateThreshold = 500; // How light must it get to change to the LIGHT state (default: 500)
-const int darkStateThreshold = 200; // How dark must it get to change to the DARK state (default: 100)
+const int lightStateThreshold = 550; // How light must it get to change to the LIGHT state (default: 500)
+const int darkStateThreshold = 250; // How dark must it get to change to the DARK state (default: 100)
 
 // Digital pins
 const int buttonPin = 2;
@@ -20,34 +20,22 @@ const int redLedPin = 10;
 // Analog pins
 const int lightPin = 0;
 
+// Enums
+enum LED {GREEN, YELLOW, RED};
+enum DoorState {OPEN, CLOSED, FAILED};
+enum LightState {LIGHT, DARK, NEUTRAL};
+
 // Door variables
 bool doorRunning = false;
 unsigned long doorRunningStartTime = 0;
 const int doorRunTime = doorRunTimeSeconds * 1000; // How long should the door motor run (in milliseconds)
-enum LED {GREEN, YELLOW, RED};
 const int minDoorWaitTimeHours = 10; // How long must the door keep a state before it can change states?
-const unsigned long minDoorWaitTime = minDoorWaitTimeHours * 60 * 60 * 1000 // Convert the hours to milliseconds (3,600,000 per hour)
+const unsigned long minDoorWaitTime = minDoorWaitTimeHours * 60 * 60 * 1000; // Convert the hours to milliseconds (3,600,000 per hour)
 unsigned long lastDoorMotorRunTime = 0; // How long has it been since we last triggered the door motor to open or close
-bool doorFailed = false;
-enum DoorState {OPEN, CLOSED, FAILED};
-const String getDoorStateName(enum DoorState door) {
-  switch (door) {
-    case OPEN: return "Open";
-    case CLOSED: return "Closed";
-    case FAILED: return "Failed";
-  }
-}
-enum DoorState expectedDoorState;
 
-// Define the light states
-enum LightState {LIGHT, DARK, NEUTRAL};
-const String getLightStateName(enum LightState light) {
-   switch (light) {
-      case LIGHT: return "Light";
-      case DARK: return "Dark";
-      case NEUTRAL: return "Neutral";
-   }
-}
+// Door sensor variables
+bool doorFailed = false;
+enum DoorState expectedDoorState;
 
 // Light detection variables
 enum LightState currentLightState = NEUTRAL;
@@ -60,6 +48,7 @@ int newStateCount = 0;
 void setup() {  
   Serial.begin(9600);
   pinMode(doorPin, OUTPUT);
+  pinMode(doorSensorPin, INPUT);
   pinMode(buttonPin, INPUT);
   pinMode(greenLedPin, OUTPUT);
   pinMode(yellowLedPin, OUTPUT);
@@ -87,9 +76,9 @@ void loop() {
     // Flash the red LED on and off so someone notices the door failed
     while (true) {
       lightLed(RED);
-      delay(1);
+      delay(1000);
       digitalWrite(redLedPin, LOW);
-      delay(1);
+      delay(1000);
     }
   } else {
     if (!doorRunning) {
@@ -157,6 +146,7 @@ int readLightSensor() {
   int lightLevel = 1023 - analogRead(lightPin);
   if (debug) {
     Serial.println(String(lightLevel) + " (" + getLightStateName(getLightState(lightLevel)) + ")");
+    Serial.println("Door is " + getDoorStateName(getDoorState()));
   }
   return lightLevel;
 }
@@ -185,7 +175,7 @@ bool isDoorMotorDone() {
 void stopDoorMotor() {
   digitalWrite(doorPin, LOW);
   doorRunning = false;
-  if (getDoorState() == FALSE || getDoorState() != expectedDoorState()) {
+  if (getDoorState() == FAILED || getDoorState() != expectedDoorState) {
     doorFailed = true;
   }
   if (debug) {
@@ -210,7 +200,7 @@ bool doorShouldRun() {
   return false;
 }
 
-DoorState getDoorState() {
+enum DoorState getDoorState() {
   if (doorFailed) {
     return FAILED;
   }
@@ -221,7 +211,7 @@ DoorState getDoorState() {
   }
 }
 
-DoorState getExpectedDoorState() {
+enum DoorState getExpectedDoorState() {
   switch (getDoorState()) {
     case OPEN: return CLOSED;
     case CLOSED: return OPEN; 
@@ -260,4 +250,21 @@ void playSuccessTone() {
   delay(250);
   tone(speakerPin, 1194, 500);
   delay(500);
+}
+
+// Helper functions for converting enum states to printable names
+const String getDoorStateName(enum DoorState door) {
+  switch (door) {
+    case OPEN: return "Open";
+    case CLOSED: return "Closed";
+    case FAILED: return "Failed";
+  }
+}
+
+const String getLightStateName(enum LightState light) {
+   switch (light) {
+      case LIGHT: return "Light";
+      case DARK: return "Dark";
+      case NEUTRAL: return "Neutral";
+   }
 }
